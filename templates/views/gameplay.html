@@ -1,0 +1,202 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% partialdef gameplay %}
+    {% block content %}
+        <div id="component">
+            <div class="pt-2 container mx-auto flex justify-center items-center">
+                <!-- Timer and Stop Button -->
+                <div class="flex items-center">
+                    <span class="text-3xl font-semibold text-secondary mr-4">Time Left:</span>
+                    <div class="grid auto-cols-max grid-flow-col gap-5 text-center">
+                        <div class="bg-neutral rounded-box text-neutral-content flex flex-col p-2">
+                            <span class="countdown font-mono text-3xl">
+                                <span id="minutes">60</span>
+                            </span>
+                            min
+                        </div>
+                        <div class="bg-neutral rounded-box text-neutral-content flex flex-col p-2">
+                            <span class="countdown font-mono text-3xl">
+                                <span id="seconds">00</span>
+                            </span>
+                            sec
+                        </div>
+                    </div>
+                    <button id="stopGameBtn" class="ml-4 btn btn-error">Stop Game</button>
+                </div>
+            </div>
+            <main class="container mx-auto my-3 px-5 lg:px-20">
+                <div class="grid grid-cols-3 gap-6 h-[calc(100vh-200px)]">
+                    <!-- Chat Section -->
+                    <div class="col-span-2 bg-gray-800 p-2 rounded-lg shadow-lg flex flex-col">
+                        <div id="chatArea" class="flex-1 overflow-y-auto p-4 bg-gray-700 rounded-lg mb-2">
+                            <!-- Chat messages will be appended here -->
+                            <p class="text-sm text-gray-300">Chat starts here...</p>
+                        </div>
+                        <div class="flex gap-4 items-center">
+                            <div class="flex-1">
+                                <input type="text" id="chatInput" class="input input-bordered w-full"
+                                       placeholder="Type your message here..."/>
+                            </div>
+                            <button id="sendBtn" class="btn btn-primary">Send</button>
+                            <button id="recordBtn" class="btn btn-secondary">🎤 Record</button>
+                        </div>
+                    </div>
+
+                    <!-- Questions and Notes Section -->
+                    <div class="bg-gray-800 p-4 rounded-lg shadow-lg flex flex-col">
+                        <!-- Prepared Questions -->
+                        <div class="h-1/3 overflow-y-auto p-4 bg-gray-700 rounded-lg mb-4">
+                            <div id="questions-list" x-bind:hx-get="'/questions/'+ $store.global_data['questions'] + '/'"
+                                 hx-swap="innerHTML" hx-target="#questions-list" hx-trigger="load">
+                                <ul class="list-disc list-inside">
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Notes Area -->
+                        <div class="flex-1">
+                            <textarea id="notesArea" class="textarea textarea-bordered w-full h-full"
+                                      placeholder="Write your notes here..."></textarea>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+        <dialog id="modal" class="modal">
+            <div class="modal-box w-96 h-96 p-2 ">
+                <h3 class="text-lg font-bold p-2">Ready!Steady!Go!</h3>
+                <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
+                    <h3 class="text-lg font-bold text-secondary mb-4">JSON Data</h3>
+                    <pre class="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto whitespace-pre-wrap">
+                        <code id="json-display"></code>
+                    </pre>
+                </div>
+                <div class="modal-action">
+                    <form method="dialog">
+                        <button class="btn">Start</button>
+                    </form>
+                </div>
+            </div>
+        </dialog>
+        <script>
+            const globalData = window.Alpine.store('global_data');
+            const waitingTypeSpeed = 50; // Typing speed for "System is thinking" in milliseconds
+            const responseTypeSpeed = 0; // Typing speed for the response in milliseconds
+
+            document.getElementById('json-display').textContent = JSON.stringify(globalData, null, 2);
+            document.getElementById('modal').showModal();
+
+            const sendMessage = () => {
+                const chatInput = document.getElementById('chatInput');
+                const message = chatInput.value;
+                if (message.trim() !== '') {
+                    const chatArea = document.getElementById('chatArea');
+                    const userMessage = document.createElement('p');
+                    userMessage.classList.add('text-sm', 'text-gray-300');
+                    userMessage.textContent = `You: ${message}`;
+                    chatArea.appendChild(userMessage);
+                    chatArea.appendChild(document.createElement('br')); // Add empty line after user message
+                    chatInput.value = '';
+
+                    const thinkingMessage = document.createElement('p');
+                    thinkingMessage.classList.add('text-sm', 'text-gray-300');
+                    chatArea.appendChild(thinkingMessage);
+
+                    let thinkingText = 'System is thinking';
+                    let index = 0;
+                    let typingInterval;
+
+                    const startTyping = () => {
+                        index = 0;
+                        typingInterval = setInterval(() => {
+                            if (index < thinkingText.length) {
+                                thinkingMessage.textContent = thinkingText.slice(0, index + 1) + '_';
+                                index++;
+                            } else {
+                                clearInterval(typingInterval);
+                                setTimeout(() => {
+                                    thinkingMessage.textContent = '';
+                                    startTyping();
+                                }, waitingTypeSpeed);
+                            }
+                        }, waitingTypeSpeed);
+                    };
+
+                    startTyping();
+
+                    fetch('/query_llm/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-CSRFToken': '{{ csrf_token }}'
+                        },
+                        body: new URLSearchParams({
+                            'message': message
+                        })
+                    })
+                        .then(response => response.json())
+                        .then(data => {
+                            clearInterval(typingInterval);
+                            thinkingMessage.textContent = '';
+                            if (data.response) {
+                                const responseMessage = document.createElement('p');
+                                responseMessage.classList.add('text-sm', 'text-gray-300');
+                                chatArea.appendChild(responseMessage);
+
+                                let responseIndex = 0;
+                                const responseText = data.response.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>'); // Preserve bolding and line breaks
+                                const responseTypingInterval = setInterval(() => {
+                                    if (responseIndex < responseText.length) {
+                                        responseMessage.innerHTML = responseText.slice(0, responseIndex + 1) + '_';
+                                        responseIndex++;
+                                    } else {
+                                        clearInterval(responseTypingInterval);
+                                        responseMessage.innerHTML = responseText;
+                                        chatArea.appendChild(document.createElement('br')); // Add empty line after response
+                                    }
+                                }, responseTypeSpeed);
+                            } else {
+                                console.error('Error:', data.error);
+                            }
+                        })
+                        .catch(error => console.error('Error:', error));
+                }
+            };
+
+            document.getElementById('sendBtn').addEventListener('click', sendMessage);
+            document.getElementById('chatInput').addEventListener('keypress', function(event) {
+                if (event.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            // Timer functionality
+            let timeLeft = 60 * 60; // 60 minutes in seconds
+
+            const updateTimer = () => {
+                const minutes = Math.floor(timeLeft / 60);
+                const seconds = timeLeft % 60;
+
+                document.getElementById('minutes').textContent = minutes;
+                document.getElementById('seconds').textContent = seconds < 10 ? '0' + seconds : seconds;
+
+                if (timeLeft > 0) {
+                    timeLeft--;
+                } else {
+                    clearInterval(timerInterval);
+                    location.reload();
+                }
+            };
+
+            const timerInterval = setInterval(updateTimer, 1000);
+
+            document.getElementById('stopGameBtn').addEventListener('click', () => {
+                clearInterval(timerInterval);
+                location.reload();
+            });
+
+            updateTimer(); // Initial call to set the timer immediately
+        </script>
+    {% endblock %}
+{% endpartialdef %}
